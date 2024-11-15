@@ -1,0 +1,54 @@
+@import "pieces.css";
+
+table.chessboard {
+    border-collapse: collapse;
+    margin: 1em auto;
+}
+
+table.chessboard th {
+    font-family: sans-serif;
+    font-weight: normal;
+}
+
+table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(odd) {
+    background-color: white;
+}
+
+table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(even) {
+    background-color: lightgray;
+}
+
+table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(odd) {
+    background-color: lightgray;
+}
+
+table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(even) {
+    background-color: white;
+}
+
+table.chessboard td, table.chessboard th {
+    width: 1.5em;
+    height: 1.5em;
+    text-align: center;
+    vertical-align: middle;
+}
+
+table.chessboard > tbody > tr:first-child > td {
+    border-top: medium solid black;
+}
+
+table.chessboard > tbody > tr:last-child > td {
+    border-bottom: medium solid black;
+}
+
+table.chessboard > tbody > tr > td:first-of-type {
+    border-left: medium solid black;
+}
+
+table.chessboard > tbody > tr > td:last-of-type  {
+    border-right: medium solid black;
+}
+
+table.chessboard > tbody > tr > td:hover {
+    background-color: salmon !important;
+}

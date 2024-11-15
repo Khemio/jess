@@ -1,0 +1,61 @@
+/* @import "chessboard1.css"; */
+
+/* table.chessboard td.whiteKing::before { */
+table.chessboard td[data-piece="whiteKing"]::before {
+    content: "\2654";
+}
+
+/* table.chessboard td.whiteQueen::before { */
+table.chessboard td[data-piece="whiteQueen"]::before {
+    content: "\2655";
+}
+
+/* table.chessboard td.whiteRook::before { */
+table.chessboard td[data-piece="whiteRook"]::before {
+    content: "\2656";
+}
+
+/* table.chessboard td.whiteBishop::before { */
+table.chessboard td[data-piece="whiteBishop"]::before {
+    content: "\2657";
+}
+
+/* table.chessboard td.whiteKnight::before { */
+table.chessboard td[data-piece="whiteKnight"]::before {
+    content: "\2658";
+}
+
+/* table.chessboard td.whitePawn::before { */
+table.chessboard td[data-piece="whitePawn"]::before {
+    content: "\2659";
+}
+
+/* table.chessboard td.blackKing::before { */
+table.chessboard td[data-piece="blackKing"]::before {
+    content: "\265a";
+}
+
+/* table.chessboard td.blackQueen::before { */
+table.chessboard td[data-piece="blackQueen"]::before {
+    content: "\265b";
+}
+
+/* table.chessboard td.blackRook::before { */
+table.chessboard td[data-piece="blackRook"]::before {
+    content: "\265c";
+}
+
+/* table.chessboard td.blackBishop::before { */
+table.chessboard td[data-piece="blackBishop"]::before {
+    content: "\265d";
+}
+
+/* table.chessboard td.blackKnight::before { */
+table.chessboard td[data-piece="blackKnight"]::before {
+    content: "\265e";
+}
+
+/* table.chessboard td.blackPawn::before { */
+table.chessboard td[data-piece="blackPawn"]::before {
+    content: "\265f";
+}
