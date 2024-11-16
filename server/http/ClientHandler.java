@@ -7,7 +7,6 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.NoSuchAlgorithmException;
 import java.util.Scanner;
 
 public class ClientHandler implements Runnable{
@@ -26,17 +25,26 @@ public class ClientHandler implements Runnable{
     public void run() {
         while (true) {
             try {
-                System.out.println();
+                // System.out.println();
                 handleReq(clientSocket);
-            } catch (Exception e) {
-                System.out.println("Failed to handle request");
+            } catch (IOException io) {
+                System.out.println("Socket IO (or File IO) failed in ClientHandler");
             }
         }
     }
 
-    private void handleReq(Socket client) throws IOException, NoSuchAlgorithmException {
+    private void handleReq(Socket client) throws IOException {
+        // System.out.println(in.available());
+        if (in.available() < 4) return;
         String data = s.useDelimiter("\\r\\n\\r\\n").next();
         Request req = new Request(data);
+
+        // String rawData = new String(in.readAllBytes());
+        // System.out.println(rawData);
+        // String[] tokens = rawData.split("\r\n\r\n");
+        // System.out.println(tokens[0]);
+        // Request req = new Request(tokens[0]);
+        // System.out.println("request head: " +  req.showHead());
 
         if (in.available() > 0) {
             req.setBody(in.readAllBytes());

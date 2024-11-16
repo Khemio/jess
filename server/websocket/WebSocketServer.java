@@ -32,11 +32,12 @@ public class WebSocketServer implements Runnable {
                         clientNum++;
                         clients[clientNum - 1] = new WebSocketHandler(client, clientNum, clients);
                         Thread websocket = new Thread(clients[clientNum - 1]);
+                        websocket.setName("websocket-" + clientNum);
                         websocket.start();
                         tarray[clientNum - 1] = websocket;
                     } catch (IllegalThreadStateException e) {
                         clientNum--;
-                        System.out.println("Could not start a new thread");
+                        System.out.println("Could not start a new thread for WebSocketHandler");
                     } catch (IOException e) {
                         clientNum--;
                         System.out.println("Could not start a new WebSocketHandler");
@@ -44,7 +45,7 @@ public class WebSocketServer implements Runnable {
 
                 }
             } catch(IOException e) {
-                System.out.println("Could not accept a client");
+                System.out.println("Could not accept a websocket client");
             } finally {
                     // server.stop();
             }

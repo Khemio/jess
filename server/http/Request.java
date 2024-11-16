@@ -13,7 +13,7 @@ public class Request {
 
     public Request(String head) {
         String[] lines = head.split("\r\n");
-
+        
         String[] tokens = lines[0].split(" ");
         method = tokens[0];
         uri = tokens[1];
@@ -27,6 +27,10 @@ public class Request {
 
     public String get(String key) {
         return headers.get(key);
+    }
+
+    public String showHead() {
+        return "%s %s %s".formatted(method, uri, version);
     }
 
     public void setBody(byte[] body) {

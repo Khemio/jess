@@ -55,8 +55,10 @@ public class WebSocketHandler implements Runnable {
             req.setBody(in.readAllBytes());
         }
 
+        // System.out.println("clientId: " + clientId);
         try {
             if ("/game".equals(req.uri)) {
+                // System.out.println("request head: " + req.showHead());
                 String socketKey = req.get("Sec-WebSocket-Key");
                 // System.out.println(socketKey);
                 if (socketKey != null) {
@@ -75,7 +77,7 @@ public class WebSocketHandler implements Runnable {
                 while (running) {
                     String message = recv();
 
-                    if (!message.isEmpty()) {
+                    if (!message.isEmpty() && running) {
                         handleMessage(message);
                     }
                 }
@@ -86,7 +88,7 @@ public class WebSocketHandler implements Runnable {
     }
 
     public void handleMessage(String msg) {
-        System.out.println(msg);
+        System.out.println("recieved message: " + msg);
         String next;
         switch (role) {
             case WHITE:
@@ -119,8 +121,8 @@ public class WebSocketHandler implements Runnable {
         try {
             out.write(response, 0, response.length); 
         } catch (IOException e) {
-            System.out.println(Thread.currentThread());
-            System.out.println("Could not complete hanshake: write failed");
+            System.out.println("clientId:" + clientId + " Could not complete hanshake: write failed");
+            System.out.println(e);
             running = false;
             s.close();
 
@@ -129,9 +131,12 @@ public class WebSocketHandler implements Runnable {
 
     public void send(String msg) {
         try {
+            // System.out.println("clientId: " + clientId);
+            // System.out.println(msg);
             out.write(encode(msg)); 
         } catch (IOException e) {
-            System.out.println("Could not complete hanshake: write failed");
+            System.out.println("Could not send message: write failed");
+            System.out.println(e);
         }
     }
 
@@ -148,7 +153,12 @@ public class WebSocketHandler implements Runnable {
         try {
             in.read(encoded);
         } catch (IOException e) {
-            System.out.println("Could not read from socket");
+            System.out.println("thread: " + Thread.currentThread());
+            System.out.println("role: " + role);
+            System.out.println("Could not read from websocket");
+            System.err.println(e);
+            running = false;
+            s.close();
         }
 
         String message = decode(encoded);
@@ -290,6 +300,10 @@ public class WebSocketHandler implements Runnable {
 
         switch (type) {
             case CLOSE:
+                // TODO: Handle close code decoding
+                // int code = ByteBuffer.allocate(8).put(bMsg).getInt();
+                // System.out.println("clientId: " + clientId);
+                // System.out.println("close code: %02X %02X".formatted(bMsg[0], bMsg[1]));
                 handleCloseFrame();
                 break;
 
