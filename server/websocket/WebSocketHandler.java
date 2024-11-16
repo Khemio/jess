@@ -25,6 +25,8 @@ public class WebSocketHandler implements Runnable {
 
     private boolean running = true;
 
+    private Role role;
+
 
     public WebSocketHandler(Socket client, int id, WebSocketHandler[] clients) throws IOException {
         socket = client;
@@ -63,11 +65,12 @@ public class WebSocketHandler implements Runnable {
 
                 // Setup client
                 if (clientId < 3) {
-                    String role = clientId == 1 ? "white" : "black";
-                    send("role:" + role);
+                    role = clientId == 1 ? Role.WHITE : Role.BLACK;
+                    // send("role:" + role);
                 } else {
-                    send("role:Spectator");
+                    role = Role.SPECTATOR;
                 }
+                send("role:" + role.getValue());
 
                 while (running) {
                     String message = recv();
@@ -84,7 +87,18 @@ public class WebSocketHandler implements Runnable {
 
     public void handleMessage(String msg) {
         System.out.println(msg);
-        brodcast(msg);
+        String next;
+        switch (role) {
+            case WHITE:
+                next = "black";
+                break;
+            case BLACK:
+                next = "white";
+                break;
+            case null, default:
+                return;
+        }
+        brodcast(msg + ":" + next);
     }
 
     public void stop() {
@@ -372,12 +386,12 @@ public class WebSocketHandler implements Runnable {
     }
 
     static enum FrameType {
-        CONTINUATION(0b00000000, "continuation"),      // int optCode = 0b00000000; // continuation
-        TEXT(0b00000001, "text"),                      // int optCode = 0b00000001; // text
-        BINARY(0b00000010, "binary"),                  // int optCode = 0b00000010; // binary
-        CLOSE(0b00001000, "close"),                    // int optCode = 0b00001000; // close
-        PING(0b00001001, "ping"),                      // int optCode = 0b00001001; // ping
-        PONG(0b00001010, "pong");                      // int optCode = 0b00001010; // pong
+        CONTINUATION(0b00000000, "continuation"),      // 0b00000000; 0x0; // continuation
+        TEXT(0b00000001, "text"),                      // 0b00000001; 0x1; // text
+        BINARY(0b00000010, "binary"),                  // 0b00000010; 0x2; // binary
+        CLOSE(0b00001000, "close"),                    // 0b00001000; 0x8; // close
+        PING(0b00001001, "ping"),                      // 0b00001001; 0x9; // ping
+        PONG(0b00001010, "pong");                      // 0b00001010; 0xA; // pong
     
         final private int code;
         final private String value;
@@ -403,6 +417,22 @@ public class WebSocketHandler implements Runnable {
     
         public String getValue() {
             return this.value;
+        }
+    }
+
+    static enum Role {
+        WHITE("white"),
+        BLACK("black"),
+        SPECTATOR("spectator");
+
+        final private String value;
+
+        Role(String value) {
+            this.value = value;
+        }
+
+        String getValue() {
+            return value;
         }
     }
 }

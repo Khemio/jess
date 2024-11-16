@@ -6,9 +6,11 @@ let player;
 
 class Player {
     #role;
+    canMove;
 
     constructor(role) {
         this.role = role;
+        this.canMove = role === "white";
     }
 
     getRole() {
@@ -26,10 +28,20 @@ function parseMessage(msg) {
     } else if (tokens[0] === "move") {
         console.log("move");
         movePiece(tokens[1]);
+        checkNext(tokens[2]);
     }
 }
 
+function checkNext(next) {
+    // TODO: Add more robust turn control
+    player.canMove = next === player.getRole();
+}
+
 function tryMove(position, isValid) {
+    if (!player.canMove) {
+        console.log("not your turn");
+        return;
+    }
     // TODO: Handle turns
     if (currMove.length === 0) {
         if (!isValid) {
@@ -43,7 +55,6 @@ function tryMove(position, isValid) {
         gameSocket.send(`move:${currMove}`);
         currMove = "";
     }
-
 }
 
 function movePiece(move) {
