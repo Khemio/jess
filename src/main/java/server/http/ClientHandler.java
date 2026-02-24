@@ -86,11 +86,11 @@ public class ClientHandler implements Runnable{
     private String getResource(String name) throws IOException{
         // System.out.println(name);
         String content;
-        String root = "client/";
+        String root = "static/";
         Path filePath = Paths.get(root + name);
-        // if (Files.notExists(filePath, null)) {
-            
-        // }
+        if (Files.notExists(filePath)) {
+            System.out.println("Invalid path");
+        }
         content = Files.readString(filePath);
         // System.out.println(content);
         return content;

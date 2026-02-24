@@ -1,7 +1,8 @@
+package jess;
 import server.http.HttpServer;
 import server.websocket.WebSocketServer;
 
-class Server {
+class Jess {
     public static void main(String[] args) {
 
         try {

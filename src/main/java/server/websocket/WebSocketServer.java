@@ -21,7 +21,7 @@ public class WebSocketServer implements Runnable {
 
     public void run(){
         // ServerSocket 
-        System.out.println("Server has started on 127.0.0.1:" + port + ".\r\nWaiting for a connection…");
+        System.out.println("Websocket has started on 127.0.0.1:" + port + ".\r\nWaiting for a connection…");
 
         try {
             while (true) {
