@@ -1,5 +1,7 @@
 # Jess: roadmap to a presentable, playable prototype
 
+> **Cleanup update (November 2026):** The `cleanup/cv-ready` branch addresses the core HTTP/WebSocket transport bugs and adds automated HTTP, raw WebSocket, and Chromium browser tests. This is enough to present Jess as a networking-focused prototype after final review. JSON messages and server-side chess move validation are **future functionality**, not part of the current cleanup.
+
 > **Planning document, not an implementation report.** The current code still uses colon-separated WebSocket messages and has no server-side chess validation. See [the proposed protocol](PROTOCOL.md) and [the existing limitations](KNOWN_ISSUES.md).
 
 ## Goal and scope
