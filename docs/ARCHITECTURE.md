@@ -1,192 +1,37 @@
-# Jess architecture and protocol
+# Jess architecture — current cleanup branch
 
-This document describes the **current implementation**, not the eventual design of a finished chess service. For a future versioned JSON message contract, see [the proposed protocol](PROTOCOL.md). For implementation priorities, see [the roadmap](ROADMAP.md).
+Jess runs two independent Java 21 TCP listeners, one for HTTP assets and one for WebSocket connections. It has no server-side chess board or rules engine.
 
-## 1. System overview
+## HTTP
 
-Jess runs two independent TCP listeners inside one Java process:
+`HttpServer` accepts connections on loopback port `4221` and launches a `ClientHandler` thread for each accepted socket. The handler uses blocking reads with a ten-second timeout and an 8 KiB header limit. It accepts one GET request per connection, allows exactly the four application assets, writes a byte-accurate `Content-Length`, and closes the socket. This is a minimal static-file server, **not** a general HTTP/1.1 implementation. The historical `Request.java` parser is unused.
 
-```text
-                     Browser (HTML / CSS / JavaScript)
-                                    |
-                     +--------------+--------------+
-                     |                             |
-                  HTTP GET                    WebSocket
-                     |                         ws://localhost:
-                     |                         4220/game
-                     v                             v
-           +------------------+        +---------------------+
-           | HTTP listener    |        | WebSocket listener  |
-           | port 4221        |        | port 4220           |
-           +------------------+        +---------------------+
-                     |                             |
-             ClientHandler                  WebSocketHandler
-                     |                             |
-               static files               handshake, frame IO,
-               from working               role, broadcast
-               directory                            |
-                                                   v
-                                             clients[] array
-                                          (shared connections)
-```
+## WebSocket
 
-The application does **not** maintain a server-side chessboard or chess-engine model. Connected browsers hold their displayed positions independently, and move messages drive updates.
+`WebSocketServer` accepts connections on loopback port `4220` with a semaphore limiting simultaneous connections to ten, including pending handshakes. It manages a concurrent set of sessions. After a valid WebSocket upgrade for `/game`, `WebSocketHandler` registers an available white or black seat; subsequent connections become spectators. Disconnected handlers free their seats and capacity.
 
-### Entry point
+`Frame.read(InputStream)` parses WebSocket frames independently of TCP chunk boundaries, reads extended lengths, enforces client masking, decodes payloads, and rejects malformed, oversized or unsupported frames. It imposes an 8 KiB frame limit. The handler assembles fragmented text messages with an 8 KiB aggregate limit, processes ping/pong and close frames, and validates UTF-8. Writes use a per-connection synchronization lock so concurrent broadcast threads do not interleave frame bytes.
 
-`src/main/java/jess/Main.java` declares `jess.Jess.main`. It constructs an `HttpServer(4221)` and a `WebSocketServer(4220)`, then starts each as its own Java thread. Failure to create one listener is caught and logged separately from failure to create the other.
+This is a narrow, custom WebSocket implementation, **not a fully audited RFC 6455 stack**. Idle connections use a socket read timeout, and no server-originated heartbeat is implemented.
 
-## 2. HTTP subsystem
+## Browser and application messaging
 
-**Files:** `server/http/HttpServer.java`, `ClientHandler.java`, `Request.java`.
+The vanilla JavaScript UI renders an 8×8 table with piece names in `data-piece` attributes and Unicode chess symbols supplied through CSS. It connects to `ws://localhost:4220/game`.
 
-### Connection model
+The current messages are:
 
-`HttpServer` uses `java.net.ServerSocket` to accept TCP connections. For every accepted socket it creates a new `ClientHandler` running on a dedicated thread. There is no executor or connection-count limit.
-
-`ClientHandler` loops over requests on the accepted connection. It checks `InputStream.available()` and reads a header using a `Scanner` with `\r\n\r\n` as its delimiter. `Request` extracts the method, URI, version and headers into a map.
-
-### Asset serving
-
-The handler maps `/` to `static/chessboard.html`. Other non-`.ico` requests take the first path segment after `/`, read `static/<filename>` relative to the **process working directory**, and return the file contents.
-
-Typical responses:
-
-| Request | Behavior |
+| Direction | Example |
 | --- | --- |
-| `GET /` | `200 OK` with the chessboard HTML |
-| `GET /chessboard.js` | `200 OK` with JavaScript |
-| `GET /chessboard.css` | `200 OK` with CSS |
-| `GET /pieces.css` | `200 OK` with CSS |
-| Path ending in `.ico` | `404 Not Found`, without a response body |
-| Missing/unreadable resource | Logs or throws an I/O error; does not consistently return an HTTP error response |
+| Server to client | `role:white` / `role:black` / `role:spectator` |
+| Client to server | `move:e2e4` |
+| Server broadcast | `move:e2e4:black` |
 
-The handler writes `Connection: Keep-Alive`, `Content-Type`, and `Content-Length` for successful responses. The parser and response writer implement only a narrow subset of HTTP/1.1 behavior; they are not standards-complete.
+Move requests are checked only for syntax. The server does not know the position, enforce turns, check legal moves, or send new arrivals a board snapshot. The browser itself maintains a `canMove` flag and updates the DOM on broadcasts, so clients joining late may disagree about the position.
 
-**Important current constraints:**
-- The parser does not validate supported methods or HTTP versions.
-- Header parsing assumes each header contains a `: ` separator.
-- The response length is calculated from Java `String.length()` rather than the encoded body byte count.
-- The request handler's idle polling loop can use CPU unnecessarily.
-- No orderly client shutdown or request timeout mechanism is present.
+## Concurrency and tests
 
-## 3. WebSocket subsystem
+The HTTP and WebSocket servers each have an acceptor thread plus a per-client handler thread. WebSocket connections are capped by a semaphore; active sessions are stored in a concurrent set; role allocation is synchronized; broadcasts use an active-session snapshot and per-client synchronized writes.
 
-**Files:** `server/websocket/WebSocketServer.java`, `WebSocketHandler.java`, `Frame.java`, `Enums.java`.
+Python integration tests cover HTTP resource requests and raw WebSocket framing/handshake/role reuse. A Playwright Chromium smoke test checks two browser windows exchanging moves and a spectator role. They are networking/UI tests, **not chess correctness tests**.
 
-### Connection model and roles
-
-`WebSocketServer` accepts TCP connections on port `4220`, creates a `WebSocketHandler` for each client, and starts a dedicated thread for it. It stores handler references and threads in fixed arrays, each with **10 slots**.
-
-The handler parses the incoming HTTP request and, when the path is `/game` and a `Sec-WebSocket-Key` header exists, responds with `101 Switching Protocols`. The accept key is computed as specified by the WebSocket handshake algorithm: SHA-1 of the client key plus the protocol GUID, then Base64.
-
-After this step, role assignment depends on the connection's monotonically increasing ID:
-
-| Connection number | Assigned role |
-| --- | --- |
-| 1 | `white` |
-| 2 | `black` |
-| 3 and later | `spectator` |
-
-These roles are **not** associated with authenticated players or a game session. Disconnected connections are not removed from the array, and the connection counter is not reduced when a client leaves.
-
-### Frames
-
-`Frame.java` includes logic to inspect WebSocket frame headers and encode outgoing text frames. It recognizes opcode categories for continuation, text, binary, close, ping and pong. Payload decoding handles masking and the short and extended payload-length fields in a limited way.
-
-`WebSocketHandler` can reply to ping with pong and responds to close frames. This should not be mistaken for complete RFC 6455 compliance. In particular, `recv()` reads into a fixed 1,024-byte buffer once and passes the whole buffer to the frame constructor, without preserving the number of bytes actually received. Fragmentation, incomplete frames, multiple frames per TCP read, and long payloads are not safely handled.
-
-Outgoing text frames are written directly to each handler's socket stream, without explicit synchronization between concurrent broadcasters.
-
-## 4. Browser UI
-
-**Files:** `chessboard.html`, `chessboard.js`, `chessboard.css`, `pieces.css`.
-
-The UI renders an 8×8 HTML table. Starting pieces are represented with `data-piece` attributes on cells. CSS inserts Unicode chess symbols according to those attributes.
-
-`chessboard.js` opens:
-
-```javascript
-const gameSocket = new WebSocket("ws://localhost:4220/game");
-```
-
-The browser has a `Player` object with a role and a `canMove` flag. The first click selects the origin square **only if it holds a piece matching the player's assigned color**. The second click chooses any destination, and the browser sends the resulting string to the WebSocket server.
-
-When the browser receives a move message, `movePiece` removes the piece attribute from the origin cell and adds it to the destination cell. This updates the visual board, including overwriting an occupied destination, but does not implement chess rules.
-
-### Client-side turn logic
-
-- White begins with `canMove = true`; black and spectators begin with `false`.
-- After receiving `move:<squares>:<nextRole>`, a browser sets `canMove` based on whether `<nextRole>` matches its own role.
-- The server does **not** track which color should move next, reject out-of-turn messages, or check legal positions.
-
-## 5. Application message protocol
-
-All application-level messages are currently colon-separated **WebSocket text payloads**, not JSON.
-
-| Direction | Example payload | Meaning |
-| --- | --- | --- |
-| Server → browser | `role:white` | Tell this connection its role |
-| Server → browser | `role:black` | Assign the black role |
-| Server → browser | `role:spectator` | Assign spectator role |
-| Browser → server | `move:e2e4` | Request a move from `e2` to `e4` |
-| Server → all | `move:e2e4:black` | Rebroadcast player message and suggest black as next turn |
-
-The appended next-turn field is derived solely from the **sender's assigned role**. For example, messages sent by the white connection are suffixed with `black`, regardless of the actual board or whether white was entitled to move.
-
-There is no separate acknowledgement or rejection message. Message contents are not formally validated.
-
-### Example message flow
-
-```text
-Browser A                           Server                         Browser B
-   |                                  |                               |
-   |--- WebSocket /game ------------->|                               |
-   |<-- role:white -------------------|                               |
-   |                                  |<---------- WebSocket /game ----|
-   |                                  |---------- role:black -------->|
-   |                                  |                               |
-   |--- move:e2e4 ------------------->|                               |
-   |<-- move:e2e4:black --------------|----- move:e2e4:black -------->|
-   |       (local DOM update)         |           (local DOM update)  |
-```
-
-Broadcasts also include spectators and other connected handlers in the shared array.
-
-## 6. Concurrency and state ownership
-
-- **HTTP listener:** one acceptor thread, plus a new thread for each HTTP client.
-- **WebSocket listener:** one acceptor thread, plus a new thread for each WebSocket client.
-- **Shared server state:** an array of `WebSocketHandler` objects and a monotonically increasing connection counter.
-- **Game state:** stored only implicitly in each browser's DOM; there is no authoritative server state.
-
-The shared handler array is accessed by multiple threads without a consistent synchronization strategy. A client can also write a frame while another handler is broadcasting to it.
-
-## 7. Recommended architecture if development resumes
-
-A next iteration can preserve the educational value of the custom transport while moving chess semantics into testable, transport-independent components:
-
-```text
-WebSocket transport
-       |
-Message parser and validation
-       |
-Game session / player registry
-       |
-Chess state + legal move engine
-       |
-Accepted move event
-       |
-Broadcast updated game state
-```
-
-Suggested responsibilities:
-
-- `GameState`: pieces, side to move, castling rights, en-passant state, and game status.
-- `Move` / `MoveParser`: typed coordinates, promotion information, syntactic validation.
-- `MoveValidator` or `ChessEngine`: legal-move generation, check, checkmate and draw conditions.
-- `GameSession`: authoritative state, player identities, spectators, join/leave behavior.
-- `WebSocketSession`: protocol reads/writes, frame buffering, connection lifecycle.
-- `MessageCodec`: validated, versioned messages and explicit success/error responses.
-
-None of these suggested chess/domain modules currently exists in the reviewed source.
+See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for limitations, [ROADMAP.md](ROADMAP.md) for optional further development, and [PROTOCOL.md](PROTOCOL.md) for a proposed JSON application protocol that is **not yet implemented**.

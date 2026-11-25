@@ -1,130 +1,90 @@
 # Jess
 
-**Jess** is an experimental browser-based chess project written in Java and vanilla JavaScript. Its main focus is the networking layer: a small HTTP/1.1 static-file server and a WebSocket server implemented without a web framework.
+Jess is an experimental multiplayer chess **networking prototype** built with Java 21 and vanilla JavaScript. Its central technical work is a custom HTTP static-file server and a custom WebSocket implementation using the Java standard library.
 
-The prototype displays a chessboard, assigns the first two WebSocket connections the white and black roles, and broadcasts submitted moves to connected browsers. **It is not yet a complete or rules-enforcing chess game.** The current server relays move messages without checking chess legality, whose turn it is, or the current board position.
+It serves an interactive browser chessboard, assigns white/black/spectator roles, and broadcasts move messages. **It does not validate chess moves, enforce turn order on the server, or maintain an authoritative chess position.** Jess is a local educational demonstration, not a completed chess service.
 
-> **Status:** Educational prototype / work in progress. Not suitable for public deployment or competitive games.
+## Implemented
 
-## Features and implementation status
-
-| Area | Current status |
+| Area | Current behavior |
 | --- | --- |
-| Browser chessboard | Implemented: starting position, piece symbols, click-to-move interaction |
-| Custom HTTP server | Implemented: serves the included HTML, CSS, and JavaScript assets |
-| WebSocket connection | Implemented: dedicated listener, upgrade handshake, basic frame handling |
-| Role assignment | Implemented: first connection is white, second is black, later connections are spectators |
-| Move synchronization | Implemented: messages sent by a player are rebroadcast to connected clients |
-| Turn handling | Client-side only; not enforced by the server |
-| Chess rules / legal move validation | Not implemented |
-| Authoritative board state | Not implemented |
-| Game rooms, reconnects, saved games | Not implemented |
-| Automated tests | No test suite is present in the reviewed repository |
+| HTTP | Small, single-request static server with bounded request headers, timeouts, and an asset allowlist |
+| WebSocket | Upgrade handshake, masked input frames, extended lengths, fragmented text, ping/pong and close frames |
+| Sessions | Up to ten concurrent client connections, with capacity and roles reclaimed on disconnect |
+| UI | Chessboard, Unicode pieces, click-to-move, role display, synchronized broadcasts |
+| Messages | Legacy colon-separated text: coordinate syntax checked; **chess legality not checked** |
+| Tests | HTTP and raw-WebSocket Python integration checks; Playwright Chromium browser smoke test |
 
-This project is most useful as a demonstration of socket programming, application-protocol handling, basic concurrency, and browser/server messaging.
+## Run locally
 
-## Technology
+Requirements: Java 21 and Maven.
 
-- **Java 21** — socket servers, connection handlers, HTTP request parsing, WebSocket framing
-- **Maven** — compilation
-- **HTML, CSS, vanilla JavaScript** — chessboard UI and browser WebSocket client
-- **Java standard library** — no additional runtime libraries declared in `pom.xml`
-
-## Getting started
-
-### Prerequisites
-
-Install a JDK that supports **Java 21** and **Maven**.
-
-### Build and run
-
-```bash
+```sh
 git clone https://github.com/Khemio/jess.git
 cd jess
 mvn compile
 ./run.sh
 ```
 
-The included `run.sh` script is intended for a POSIX-compatible shell. Its contents effectively run:
+The included script changes to `target/classes` and runs `java jess.Jess`. On systems without a POSIX shell, run these two commands manually. The current static-file handler expects `static/` relative to the **process working directory**, so do not run the class from the repository root.
 
-```bash
-cd target/classes
-java jess.Jess
+Open **http://127.0.0.1:4221/**, then open a second browser tab. The first two successful connections occupy white and black seats; other connections are spectators. A closed connection releases its role. Try white `e2e4` followed by black `e7e5` through the UI.
+
+**Limitations:** the server relays moves without chess rules or turn validation. New spectators and refreshed clients start from the original board, not the current state. The client uses a hard-coded local WebSocket URL, and both Java servers listen on loopback.
+
+| Port | Purpose |
+| --- | --- |
+| `4221` | HTTP files: `/`, `/chessboard.js`, `/chessboard.css`, `/pieces.css` |
+| `4220` | WebSocket upgrade at `/game` |
+
+## Testing
+
+From the repository root, first run `mvn compile`. Then:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_http_smoke.py' -v
+python3 -m unittest discover -s tests -p 'test_websocket_smoke.py' -v
 ```
 
-You can use those two commands directly when not using the shell script. **Run from `target/classes`**: the HTTP server currently resolves static assets relative to its working directory.
+The optional real-browser smoke test also requires Playwright and its Chromium browser:
 
-Then open:
+```sh
+python3 -m pip install playwright==1.56.0
+python3 -m playwright install chromium
+python3 -m unittest discover -s tests -p 'test_browser_smoke.py' -v
+```
+
+The browser test checks that two Chromium pages can exchange `e2e4` and `e7e5` and that a third connection receives the spectator role. CI builds and runs all integration tests and publishes a screenshot artifact when available. Tests start and stop their own Java server, so close any manually running Jess instance before executing them.
+
+## Design
 
 ```text
-http://localhost:4221/
+Browser (HTML/CSS/JavaScript)
+      |             |
+  HTTP :4221   WebSocket :4220
+      |             |
+Static files    Frame decoder / handshake
+                    |
+             Role registry / broadcast
 ```
 
-For a basic local demonstration, open a second browser tab or window. Connections are assigned roles in arrival order. A third connection becomes a spectator. Restart the server to reset role assignments; disconnected clients are not yet reclaimed correctly.
+The current application messages are text such as `role:white`, `move:e2e4`, and `move:e2e4:black`. This is **not** the proposed versioned JSON protocol. See [PROTOCOL.md](docs/PROTOCOL.md) for that future design.
 
-### Ports
+Relevant implementation directories:
 
-| Port | Service | Purpose |
-| --- | --- | --- |
-| `4221` | HTTP | Serves the browser UI and static assets |
-| `4220` | WebSocket | Accepts connections at `/game` and relays player messages |
+- `src/main/java/jess/`: starts the HTTP and WebSocket listeners
+- `src/main/java/server/http/`: narrowly scoped static-file HTTP handling
+- `src/main/java/server/websocket/`: custom WebSocket framing and connection management
+- `src/main/resources/static/`: browser UI
+- `tests/`: Python transport and browser integration tests
+- `.github/workflows/`: Java build and test CI
 
-The WebSocket listener is **separate from the HTTP listener**. It is not an upgrade of the connection to port `4221`. The bundled browser client connects to `ws://localhost:4220/game`.
+The earlier `server.http.Request` class is retained for reference but is not used by the current HTTP handler.
 
-## How a move works
+## Further documentation
 
-1. A browser connects to `/game` over WebSocket and receives its role, for example `role:white`.
-2. The player clicks one of their pieces and then a destination square.
-3. The browser sends a message such as `move:e2e4`.
-4. The WebSocket handler relays the message to connected clients, appending the next role: `move:e2e4:black`.
-5. Each browser updates its displayed board and its local turn flag.
+[Architecture](docs/ARCHITECTURE.md) · [Known issues](docs/KNOWN_ISSUES.md) · [Roadmap](docs/ROADMAP.md) · [Proposed JSON protocol](docs/PROTOCOL.md)
 
-Moves use four-character coordinate notation: an origin square followed by a destination square, for example `e2e4`. This is a **message format**, not evidence that the move has been validated. The UI checks only that the selected starting square contains a piece of the assigned color; it does not calculate legal moves.
+C++ chess-engine integration, a C++ server, or a C++/SDL3/WebAssembly 3D board remain optional future directions. The current goal is a stable, presentable networking demonstration.
 
-The application also uses text messages such as `role:white`, `role:black`, and `role:spectator`. See [Architecture](docs/ARCHITECTURE.md) for the protocol and message flow.
-
-## Repository layout
-
-```text
-src/main/
-├── java/
-│   ├── jess/
-│   │   └── Main.java
-│   └── server/
-│       ├── http/
-│       │   ├── HttpServer.java
-│       │   ├── ClientHandler.java
-│       │   └── Request.java
-│       └── websocket/
-│           ├── WebSocketServer.java
-│           ├── WebSocketHandler.java
-│           ├── Frame.java
-│           └── Enums.java
-└── resources/
-    └── static/
-        ├── chessboard.html
-        ├── chessboard.js
-        ├── chessboard.css
-        └── pieces.css
-```
-
-`Main.java` defines the application entry-point class `jess.Jess`. It starts the two server listeners on separate threads.
-
-## Documentation
-
-- [Architecture and protocol](docs/ARCHITECTURE.md) — components, concurrency, HTTP/WebSocket behavior, and browser message flow
-- [Known issues and next steps](docs/KNOWN_ISSUES.md) — current limitations and technical findings
-- [Roadmap](docs/ROADMAP.md) — prioritized path to a reliable and playable local chess game
-- [Proposed WebSocket protocol v1](docs/PROTOCOL.md) — draft JSON message contract; not implemented yet
-
-## Development direction
-
-The immediate goal is a **presentable local chess prototype**, not a larger Java chess platform. The priorities are reliable HTTP/WebSocket handling, a formal client/server message format, server-authoritative chess validation, reproducible tests, and a working two-player demonstration. See the [roadmap](docs/ROADMAP.md).
-
-A future C++ chess engine (through IPC, a service, or JNI), a C++ backend rewrite, and a 3D C++/SDL3/WebAssembly board are potential follow-up experiments, **not part of the current implementation or MVP requirements**. The technology direction remains undecided.
-
-## Scope and safety
-
-Jess currently has no authentication, encryption, server-side turn verification, authoritative game state, or defensive handling for several malformed network inputs. It is intended for **local experimentation**, not for untrusted networks or production use.
-
-The documentation describes the source as it exists on `main` at commit `81bce506fd7cea32b51b279b1dde69590fa06844` (reviewed November 2026). It is based on source inspection; no automated build or end-to-end run was performed as part of this documentation pass.
+**Security:** Jess has no authentication, HTTPS/WSS, origin policy, or game-level authorization. The listeners bind to `127.0.0.1` and should not be publicly exposed.
