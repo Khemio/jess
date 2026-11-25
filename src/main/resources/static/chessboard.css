@@ -1,54 +1,87 @@
 @import "pieces.css";
 
+/* Minimal presentation styling; game logic and element structure are unchanged. */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    padding: 2rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background: #f6f7f9;
+    color: #273444;
+    font-family: system-ui, sans-serif;
+}
+
+#player {
+    font-size: 1rem;
+    font-weight: 650;
+}
+
+#currentSquare {
+    min-height: 1.5rem;
+    font-size: 0.875rem;
+    color: #49586a;
+}
+
 table.chessboard {
     border-collapse: collapse;
-    margin: 1em auto;
+    margin: 0 auto;
+    background: #fff;
+    box-shadow: 0 10px 30px rgb(21 33 54 / 12%);
 }
 
 table.chessboard th {
-    font-family: sans-serif;
-    font-weight: normal;
+    font-family: system-ui, sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    width: 1.4rem;
+    height: 1.4rem;
+    text-align: center;
 }
 
-table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(odd) {
-    background-color: white;
-}
-
-table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(even) {
-    background-color: lightgray;
-}
-
-table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(odd) {
-    background-color: lightgray;
-}
-
-table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(even) {
-    background-color: white;
-}
-
-table.chessboard td, table.chessboard th {
-    width: 1.5em;
-    height: 1.5em;
+table.chessboard td {
+    width: clamp(2.4rem, 7vw, 3.5rem);
+    height: clamp(2.4rem, 7vw, 3.5rem);
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    line-height: 1;
     text-align: center;
     vertical-align: middle;
+    cursor: pointer;
+}
+
+table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(odd),
+table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(even) {
+    background-color: #f3f2ed;
+}
+
+table.chessboard > tbody > tr:nth-child(odd) > td:nth-of-type(even),
+table.chessboard > tbody > tr:nth-child(even) > td:nth-of-type(odd) {
+    background-color: #bbc8d3;
 }
 
 table.chessboard > tbody > tr:first-child > td {
-    border-top: medium solid black;
+    border-top: 2px solid #273444;
 }
 
 table.chessboard > tbody > tr:last-child > td {
-    border-bottom: medium solid black;
+    border-bottom: 2px solid #273444;
 }
 
 table.chessboard > tbody > tr > td:first-of-type {
-    border-left: medium solid black;
+    border-left: 2px solid #273444;
 }
 
-table.chessboard > tbody > tr > td:last-of-type  {
-    border-right: medium solid black;
+table.chessboard > tbody > tr > td:last-of-type {
+    border-right: 2px solid #273444;
 }
 
 table.chessboard > tbody > tr > td:hover {
-    background-color: salmon !important;
+    background-color: #f2c779 !important;
 }

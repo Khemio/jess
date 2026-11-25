@@ -1,273 +1,240 @@
 package server.websocket;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.Scanner;
+import java.util.HashMap;
+import java.util.Map;
 
-import server.http.Request;
 import server.websocket.Enums.FrameType;
-import server.websocket.Enums.Role;;
+import server.websocket.Enums.Role;
 
-
-public class WebSocketHandler implements Runnable {
-    final private Socket socket;
-    final private InputStream in;
-    final private OutputStream out;
-    final private Scanner s;
-    final private int clientId;
-    private WebSocketHandler[] clients;
-
-    private boolean running = true;
-
+/**
+ * One WebSocket connection. The chess application still uses the legacy
+ * text protocol (role:<color>, move:<from><to>:<next>).
+ */
+public final class WebSocketHandler implements Runnable {
+    private static final int MAX_HEADER_BYTES = 8192;
+    private final Socket socket;
+    private final WebSocketServer server;
+    private final Object writeLock = new Object();
+    private InputStream in;
+    private OutputStream out;
     private Role role;
 
-
-    public WebSocketHandler(Socket client, int id, WebSocketHandler[] clients) throws IOException {
-        socket = client;
-        in =  socket.getInputStream();
-        out = socket.getOutputStream();
-        s = new Scanner(in, "UTF-8");
-        clientId = id;
-        this.clients = clients;
+    public WebSocketHandler(Socket socket, WebSocketServer server) {
+        this.socket = socket;
+        this.server = server;
     }
 
+    @Override
     public void run() {
-        try {
-            handleReq();
-        }
-        catch(IOException e) {
-            System.out.println("handleReq() IOException");
-        } catch(NoSuchAlgorithmException e) {
-            System.out.println("handleReq() NoSuchAlgorithmException");
-        }
-    }
+        try (socket) {
+            in = socket.getInputStream();
+            out = socket.getOutputStream();
+            if (!handshake()) return;
 
-    private void handleReq() throws IOException, NoSuchAlgorithmException {
-        String data = s.useDelimiter("\\r\\n\\r\\n").next();
-        Request req = new Request(data);
-        if (in.available() > 0) {
-            req.setBody(in.readAllBytes());
-        }
+            role = server.register(this);
+            send("role:" + role.getValue());
 
-        // System.out.println("clientId: " + clientId);
-        try {
-            if ("/game".equals(req.uri)) {
-                // System.out.println("request head: " + req.showHead());
-                String socketKey = req.get("Sec-WebSocket-Key");
-                // System.out.println(socketKey);
-                if (socketKey != null) {
-                    handshake(socketKey);
+            ByteArrayOutputStream fragments = null;
+            while (!socket.isClosed()) {
+                Frame frame;
+                try {
+                    frame = Frame.read(in);
+                } catch (Frame.ProtocolException ex) {
+                    closeWithCode(ex.getCloseCode());
+                    return;
                 }
 
-                // Setup client
-                if (clientId < 3) {
-                    role = clientId == 1 ? Role.WHITE : Role.BLACK;
-                    // send("role:" + role);
-                } else {
-                    role = Role.SPECTATOR;
-                }
-                send("role:" + role.getValue());
-
-                while (running) {
-                    String message = recv();
-
-                    if (!message.isEmpty() && running) {
-                        handleMessage(message);
+                if (frame == null) return;
+                switch (frame.getType()) {
+                    case PING -> sendControl(FrameType.PONG, frame.getPayload());
+                    case PONG -> { /* Reply to our own pings would be handled here. */ }
+                    case CLOSE -> {
+                        sendControl(FrameType.CLOSE, frame.getPayload()); // Echo close frame, then exit.
+                        return;
+                    }
+                    case BINARY -> {
+                        closeWithCode(1003); // This application supports text messages only.
+                        return;
+                    }
+                    case TEXT -> {
+                        if (fragments != null) {
+                            closeWithCode(1002); // New data frame before previous fragmented message ended.
+                            return;
+                        }
+                        if (frame.isFinal()) {
+                            if (!handleText(frame.getPayload())) return;
+                        } else {
+                            fragments = new ByteArrayOutputStream();
+                            fragments.writeBytes(frame.getPayload());
+                        }
+                    }
+                    case CONTINUATION -> {
+                        if (fragments == null) {
+                            closeWithCode(1002);
+                            return;
+                        }
+                        if (fragments.size() + frame.getPayload().length > Frame.MAX_PAYLOAD_BYTES) {
+                            closeWithCode(1009);
+                            return;
+                        }
+                        fragments.writeBytes(frame.getPayload());
+                        if (frame.isFinal()) {
+                            if (!handleText(fragments.toByteArray())) return;
+                            fragments = null;
+                        }
                     }
                 }
             }
+        } catch (IOException e) {
+            // EOF and disconnect are expected. The finally block reclaims the seat and capacity.
+            if (!socket.isClosed()) System.err.println("WebSocket client ended: " + e.getMessage());
         } finally {
-            s.close();
+            server.disconnect(this);
         }
     }
 
-    public void handleMessage(String msg) {
-        System.out.println("recieved message: " + msg);
-        String next;
-        switch (role) {
-            case WHITE:
-                next = "black";
-                break;
-            case BLACK:
-                next = "white";
-                break;
-            case null, default:
-                return;
+    private boolean handleText(byte[] payload) throws IOException {
+        final String message;
+        try {
+            message = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(payload)).toString();
+        } catch (CharacterCodingException e) {
+            closeWithCode(1007); // Invalid UTF-8 in a text message.
+            return false;
         }
-        brodcast(msg + ":" + next);
+
+        // The legacy application format remains unchanged; legal chess moves are NOT checked.
+        if (role == Role.SPECTATOR || !message.matches("move:[a-h][1-8][a-h][1-8]")) return true;
+        String next = role == Role.WHITE ? "black" : "white";
+        server.broadcast(message + ":" + next);
+        return true;
+    }
+
+    public void send(String message) {
+        try {
+            sendControl(FrameType.TEXT, message.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            stop();
+        }
+    }
+
+    private void sendControl(FrameType type, byte[] payload) throws IOException {
+        synchronized (writeLock) {
+            Frame.write(out, type, payload); // One writer at a time per socket.
+        }
+    }
+
+    private void closeWithCode(int code) throws IOException {
+        sendControl(FrameType.CLOSE, new byte[]{ (byte) (code >>> 8), (byte) code });
     }
 
     public void stop() {
-        // Maybe send closing frame?
-        running = false;
-        // s.close();
-        // socket.close();
-    }
-
-    private void handshake(String clientKey) throws NoSuchAlgorithmException, UnsupportedEncodingException {
-        byte[] response = ("HTTP/1.1 101 Switching Protocols\r\n"
-            + "Connection: Upgrade\r\n"
-            + "Upgrade: websocket\r\n"
-            + "Sec-WebSocket-Accept: "
-            + generateAcceptKey(clientKey)
-            + "\r\n\r\n").getBytes("UTF-8");
-
         try {
-            out.write(response, 0, response.length); 
+            socket.close(); // Interrupts blocking reads and triggers cleanup in finally.
         } catch (IOException e) {
-            System.out.println("clientId:" + clientId + " Could not complete hanshake: write failed");
-            System.out.println(e);
-            running = false;
-            s.close();
-
+            // Already closed.
         }
     }
 
-    private String generateAcceptKey(String clientKey) throws NoSuchAlgorithmException, UnsupportedEncodingException {
-        byte[] keyBytes = (clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes("UTF-8");
-        byte[] keySha1 = MessageDigest.getInstance("SHA-1").digest(keyBytes);
-        var e = Base64.getEncoder();
+    private boolean handshake() throws IOException {
+        socket.setSoTimeout(10_000);
+        String header = readHeader(in);
+        if (header == null) return false;
 
-        return e.encodeToString(keySha1);
-    }
+        String[] lines = header.split("\r\n");
+        if (lines.length == 0 || !"GET /game HTTP/1.1".equals(lines[0]))
+            return rejectHandshake();
 
-    public void send(String msg) {
-        Frame outFrame = new Frame(msg, FrameType.TEXT, false);
+        Map<String, String> headers = new HashMap<>();
+        for (int i = 1; i < lines.length; i++) {
+            int colon = lines[i].indexOf(':');
+            if (colon <= 0) return rejectHandshake();
+            headers.put(lines[i].substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT),
+                    lines[i].substring(colon + 1).trim());
+        }
+
+        String key = headers.get("sec-websocket-key");
+        if (!"websocket".equalsIgnoreCase(headers.get("upgrade"))
+                || !hasToken(headers.get("connection"), "upgrade")
+                || !"13".equals(headers.get("sec-websocket-version"))
+                || !validKey(key)) return rejectHandshake();
+
+        final byte[] digest;
         try {
-            out.write(outFrame.getBytes()); 
-        } catch (IOException e) {
-            System.out.println("Could not send message: write failed");
-            System.out.println(e);
+            digest = MessageDigest.getInstance("SHA-1").digest(
+                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                            .getBytes(StandardCharsets.US_ASCII));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-1 is required by the WebSocket protocol", e);
         }
+        String accept = Base64.getEncoder().encodeToString(digest);
+        out.write(("HTTP/1.1 101 Switching Protocols\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Sec-WebSocket-Accept: " + accept + "\r\n\r\n")
+                .getBytes(StandardCharsets.US_ASCII));
+        out.flush();
+        socket.setSoTimeout(120_000);
+        return true;
     }
 
-    public void brodcast(String msg) {
-        for (WebSocketHandler client: clients) {
-            if (client != null) client.send(msg);
+    private static boolean hasToken(String value, String token) {
+        if (value == null) return false;
+        for (String part : value.split(",")) {
+            if (token.equalsIgnoreCase(part.trim())) return true;
         }
+        return false;
     }
 
-    private String recv() {
-        int size = 1024;
-        byte[] encoded = new byte[size];
-    
+    private static boolean validKey(String key) {
+        if (key == null) return false;
         try {
-            in.read(encoded);
-        } catch (IOException e) {
-            System.out.println("Could not read from websocket");
-            System.err.println(e);
-            running = false;
-            s.close();
-        }
-        Frame inFrame = new Frame(encoded);
-
-        switch (inFrame.getType()) {
-            case CLOSE:
-                // TODO: Handle close code decoding
-                // int code = ByteBuffer.allocate(8).put(bMsg).getInt();
-                // System.out.println("clientId: " + clientId);
-                // System.out.println("close code: %02X %02X".formatted(bMsg[0], bMsg[1]));
-                handleCloseFrame();
-                break;
-
-            case PING:
-                sendControlFrame(FrameType.PONG);
-                break;
-
-            case TEXT, BINARY, CONTINUATION, PONG:
-                break;
-
-            case null, default:
-                System.err.println("Wrong optcode");
-                sendCloseFrame(1002);
-                break;
-        }
-        
-        return inFrame.showMessage();
-    }
-
-    private void handleCloseFrame() {
-        sendCloseFrame(1000);
-    }
-
-    private void sendCloseFrame(int code) {
-        byte[] bCode = ByteBuffer.allocate(4).putInt(code).array();
-        byte[] resp = new byte[4];
-
-        resp[0] = (byte) (128 | FrameType.CLOSE.getCode());
-        resp[1] = 2;
-        resp[2] = bCode[2];
-        resp[3] = bCode[3];
-
-        try {
-            out.write(resp);
-            running = false;
-            s.close();
-        } catch (IOException e) {
-            System.out.println("something went wrong");
+            return Base64.getDecoder().decode(key).length == 16;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 
-    private void sendCloseFrame(int code, String reason) {
-        byte[] bCode = ByteBuffer.allocate(4).putInt(code).array();
-        byte[] payload = ("  " + reason).getBytes(); 
-        payload[0] = bCode[2];
-        payload[1] = bCode[3];
-        byte[] resp = new byte[payload.length + 2];
-
-        resp[0] = (byte) (128 | FrameType.CLOSE.getCode());
-        resp[1] = (byte) payload.length;
-
-        for (int i = 0; i < payload.length; i++) {
-            resp[i + 2] = payload[i];
-        }
-
-        try {
-            out.write(resp);
-            running = false;
-            s.close();
-        } catch (IOException e) {
-            System.out.println("something went wrong");
-        }
+    private boolean rejectHandshake() throws IOException {
+        byte[] message = "Bad WebSocket upgrade request\n".getBytes(StandardCharsets.US_ASCII);
+        out.write(("HTTP/1.1 400 Bad Request\r\n"
+                + "Connection: close\r\n"
+                + "Content-Length: " + message.length + "\r\n"
+                + "Content-Type: text/plain\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(message);
+        out.flush();
+        return false;
     }
 
-    private void sendControlFrame(FrameType type) {
-        byte[] resp = new byte[2];
-
-        resp[0] = (byte) (128 | type.getCode());
-        resp[1] = 0;
-
-        try {
-            out.write(resp);
-        } catch (IOException e) {
-            System.out.println("something went wrong");
+    /** Stop exactly at the header terminator to avoid consuming the first WebSocket frame. */
+    private static String readHeader(InputStream input) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        byte[] terminator = {'\r', '\n', '\r', '\n'};
+        int matched = 0;
+        while (bytes.size() < MAX_HEADER_BYTES) {
+            int next = input.read();
+            if (next < 0) {
+                if (bytes.size() == 0) return null;
+                throw new IOException("Incomplete WebSocket handshake");
+            }
+            bytes.write(next);
+            matched = next == terminator[matched] ? matched + 1 : (next == '\r' ? 1 : 0);
+            if (matched == terminator.length) return bytes.toString(StandardCharsets.ISO_8859_1);
         }
+        throw new IOException("Oversized WebSocket handshake");
     }
-
-    private void sendControlFrame(FrameType type, String msg) {
-        byte[] bMsg = msg.getBytes();
-        byte[] resp = new byte[bMsg.length + 2];
-
-        resp[0] = (byte) (128 | type.getCode());
-        resp[1] = (byte) bMsg.length;
-
-        for (int i = 0; i < bMsg.length; i++) {
-            resp[i + 2] = bMsg[i];
-        }
-
-        try {
-            out.write(resp);
-        } catch (IOException e) {
-            System.out.println("something went wrong");
-        }
-    }
-
 }

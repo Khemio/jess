@@ -1,44 +1,36 @@
 package server.http;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 
-public class HttpServer implements Runnable{
-    private int port;
-    private ServerSocket server;
-    private int numOfClients = 0;
+public final class HttpServer implements Runnable {
+    private final ServerSocket server;
 
-    public HttpServer(int port) throws IOException{
-        this.port = port;
-        server = new ServerSocket(port);
+    public HttpServer(int port) throws IOException {
+        server = new ServerSocket();
         server.setReuseAddress(true);
+        server.bind(new InetSocketAddress("127.0.0.1", port));
     }
-    
-    public void run(){
-        
-        try {
-            while (true) {
-                Socket client = server.accept();
 
-                try {
-                    ClientHandler clientHandler = new ClientHandler(client);
-                    Thread httpClient = new Thread(clientHandler);
-                    numOfClients++;
-                    httpClient.setName("client-" + numOfClients);
-                    httpClient.start();
-                } catch (IllegalThreadStateException e) {
-                    System.out.println("Could not start a new thread for ClientHandler");
-                } catch (IOException e) {
-                    System.out.println("Could not start a new ClientHandler");
+    @Override
+    public void run() {
+        while (!server.isClosed()) {
+            try {
+                Socket client = server.accept();
+                Thread thread = new Thread(new ClientHandler(client), "http-client-" + client.getPort());
+                thread.start();
+            } catch (SocketException e) {
+                if (!server.isClosed()) {
+                    System.err.println("HTTP accept failed: " + e.getMessage());
                 }
+                break;
+            } catch (IOException e) {
+                System.err.println("HTTP accept failed: " + e.getMessage());
             }
-        } catch(IOException e) {
-            System.out.println("Could not accept an HTTP client");
-        } finally {
-                // server.stop();
         }
-        
     }
 
     public void stop() throws IOException {
