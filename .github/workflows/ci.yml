@@ -1,4 +1,4 @@
-name: Java build and HTTP smoke tests
+name: Java build and smoke tests
 
 on:
   push:
@@ -14,7 +14,21 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Build
         run: mvn -B --no-transfer-progress package
-      - name: HTTP smoke tests
-        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - name: HTTP, WebSocket, and browser smoke tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Upload browser demonstration screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jess-browser-demo
+          path: target/browser-demo.png
+          if-no-files-found: ignore
